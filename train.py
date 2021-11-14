@@ -66,7 +66,8 @@ for eo in range(10):
         logits = model(input_ids, attention_mask, segment_ids)
         loss = loss_fun(logits, labels)
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.25)
+        # https://www.paddlepaddle.org.cn/documentation/docs/zh/guides/01_paddle2.0_introduction/basic_concept/gradient_clip_cn.html
+        # clip_grad_norm_(model.parameters(), max_norm=0.25)
         optimizer.step()
         optimizer.clear_grad()
         sample_f1 = metrics.get_sample_f1(logits, labels)
