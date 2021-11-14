@@ -2,7 +2,7 @@ from tqdm import tqdm
 
 import paddle
 from paddle.io import DataLoader
-from paddlenlp.transformers import ErnieTokenizer, ErnieModel
+from paddlenlp.transformers import ErnieTokenizer, ErnieModel, RobertaTokenizer, RobertaModel, BertModel, BertTokenizer
 
 from data_loader import MapDataset, load_data
 from GlobalPointer import GlobalPointer, MetricsCalculator
@@ -11,13 +11,16 @@ from GlobalPointer import GlobalPointer, MetricsCalculator
 train_cme_path = './datasets/CMeEE_train.json' # CMeEE 训练集
 eval_cme_path = './datasets/CMeEE_dev.json' # CMeEE 测试集
 device = paddle.get_device()
+print(device)
 BATCH_SIZE = 16
 
 ENT_CLS_NUM = 9
-print('1')
+
 # tokenizer
-tokenizer = ErnieTokenizer.from_pretrained('ernie-1.0')
-print('2')
+# tokenizer = ErnieTokenizer.from_pretrained('ernie-1.0')
+# tokenizer = RobertaTokenizer.from_pretrained('roberta-wwm-ext')
+tokenizer = BertTokenizer.from_pretrained('bert-wwm-chinese')
+
 # train_data and val_data
 ner_train = MapDataset(load_data(train_cme_path), tokenizer=tokenizer)
 ner_loader_train = DataLoader(ner_train, batch_size=BATCH_SIZE, collate_fn=ner_train.collate, shuffle=True, num_workers=16)
@@ -25,12 +28,15 @@ ner_evl = MapDataset(load_data(eval_cme_path), tokenizer=tokenizer)
 ner_loader_evl = DataLoader(ner_evl, batch_size=BATCH_SIZE, collate_fn=ner_evl.collate, shuffle=False, num_workers=16)
 
 # model
-encoder = ErnieModel.from_pretrained('ernie-1.0')
-print('3')
-model = GlobalPointer(encoder, ENT_CLS_NUM, 64).to(device)  # 9个实体类型
+# encoder = ErnieModel.from_pretrained('ernie-1.0')
+# encoder = RobertaModel.from_pretrained('roberta-wwm-ext')
+encoder = BertModel.from_pretrained('bert-wwm-chinese')
+
+model = GlobalPointer(encoder, ENT_CLS_NUM, 64) #.to(device)  # 9个实体类型
 optimizer = paddle.optimizer.Adam(parameters=model.parameters(), learning_rate=2e-5)
 
 print('finshed')
+
 
 def multilabel_categorical_crossentropy(y_pred, y_true):
     y_pred = (1 - 2 * y_true) * y_pred  # -1 -> pos classes, 1 -> neg classes
