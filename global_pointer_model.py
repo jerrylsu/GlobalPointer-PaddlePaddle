@@ -8,16 +8,16 @@ class MetricsCalculator(object):
         super().__init__()
 
     def get_sample_f1(self, y_pred, y_true):
-        y_pred = paddle.greater_than(y_pred, 0).float()
-        return 2 * paddle.sum(y_true * y_pred) / paddle.sum(y_true + y_pred)
+        y_pred = paddle.greater_than(y_pred, paddle.to_tensor(0.)).cast('int64')
+        return 2. * paddle.sum(y_true * y_pred) / paddle.sum(y_true + y_pred)
 
     def get_sample_precision(self, y_pred, y_true):
-        y_pred = paddle.greater_than(y_pred, 0).float()
+        y_pred = paddle.greater_than(y_pred, paddle.to_tensor(0.)).cast('int64')
         return paddle.sum(y_pred[y_true == 1]) / (y_pred.sum() + 1)
 
     def get_evaluate_fpr(self, y_pred, y_true):
-        y_pred = y_pred.data.cpu().numpy()
-        y_true = y_true.data.cpu().numpy()
+        y_pred = y_pred.cpu().numpy()
+        y_true = y_true.cpu().numpy()
         pred = []
         true = []
         for b, l, start, end in zip(*np.where(y_pred > 0)):
@@ -48,30 +48,30 @@ class GlobalPointer(nn.Layer):
         self.RoPE = RoPE
 
     def sinusoidal_position_embedding(self, batch_size, seq_len, output_dim):
-        position_ids = paddle.arange(0, seq_len, dtype=paddle.float32).unsqueeze(-1)
+        position_ids = paddle.arange(0, seq_len, dtype='float32').unsqueeze(-1)
 
-        indices = paddle.arange(0, output_dim // 2, dtype=paddle.float32)
-        indices = paddle.pow(10000, -2 * indices / output_dim)
+        indices = paddle.arange(0, output_dim // 2, dtype='float32')
+        indices = paddle.pow(paddle.to_tensor(10000.), -2 * indices / output_dim)
         embeddings = position_ids * indices
         embeddings = paddle.stack([paddle.sin(embeddings), paddle.cos(embeddings)], axis=-1)
-        embeddings = embeddings.repeat((batch_size, *([1]*len(embeddings.shape))))
+        embeddings = embeddings.tile((batch_size, *([1]*len(embeddings.shape))))
         embeddings = paddle.reshape(embeddings, (batch_size, seq_len, output_dim))
-        embeddings = embeddings.to(self.device)
+        # embeddings = embeddings.set_device(self.device)
         return embeddings
         
     def forward(self, input_ids, attention_mask, token_type_ids):
-        self.device = input_ids.device
-        
-        context_outputs = self.encoder(input_ids, attention_mask, token_type_ids)
+        # self.device = input_ids.palce()
+
+        context_outputs = self.encoder(input_ids, token_type_ids=token_type_ids)  # , attention_mask=attention_mask)
         # last_hidden_state:(batch_size, seq_len, hidden_size)
         last_hidden_state = context_outputs[0]
 
-        batch_size = last_hidden_state.size()[0]
-        seq_len = last_hidden_state.size()[1]
+        batch_size = last_hidden_state.shape[0]
+        seq_len = last_hidden_state.shape[1]
 
         # outputs:(batch_size, seq_len, ent_type_size*inner_dim*2)
         outputs = self.dense(last_hidden_state)
-        outputs = paddle.split(outputs, self.inner_dim * 2, axis=-1)
+        outputs = paddle.split(outputs, self.ent_type_size, axis=-1)
         # outputs:(batch_size, seq_len, ent_type_size, inner_dim*2)
         outputs = paddle.stack(outputs, axis=-2)
         # qw,kw:(batch_size, seq_len, ent_type_size, inner_dim)
@@ -80,8 +80,8 @@ class GlobalPointer(nn.Layer):
             # pos_emb:(batch_size, seq_len, inner_dim)
             pos_emb = self.sinusoidal_position_embedding(batch_size, seq_len, self.inner_dim)
             # cos_pos,sin_pos: (batch_size, seq_len, 1, inner_dim)
-            cos_pos = pos_emb[..., None, 1::2].repeat_interleave(2, axis=-1)
-            sin_pos = pos_emb[..., None, ::2].repeat_interleave(2, axis=-1)
+            cos_pos = pos_emb[..., None, 1::2].reshape((batch_size, seq_len, self.inner_dim // 2, 1)).tile((1, 1, 1, 2)).reshape((batch_size, seq_len, 1, self.inner_dim))
+            sin_pos = pos_emb[..., None, ::2].reshape((batch_size, seq_len, self.inner_dim // 2, 1)).tile((1, 1, 1, 2)).reshape((batch_size, seq_len, 1, self.inner_dim))
             qw2 = paddle.stack([-qw[..., 1::2], qw[..., ::2]], -1)
             qw2 = qw2.reshape(qw.shape)
             qw = qw * cos_pos + qw2 * sin_pos
@@ -92,7 +92,8 @@ class GlobalPointer(nn.Layer):
         logits = paddle.einsum('bmhd,bnhd->bhmn', qw, kw)
 
         # padding mask
-        pad_mask = attention_mask.unsqueeze(1).unsqueeze(1).expand(batch_size, self.ent_type_size, seq_len, seq_len)
+        attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+        pad_mask = paddle.expand(attention_mask, (batch_size, self.ent_type_size, seq_len, seq_len))
         logits = logits * pad_mask - (1 - pad_mask) * 1e12
 
         # 排除下三角

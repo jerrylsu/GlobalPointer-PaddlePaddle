@@ -5,41 +5,49 @@ from paddlenlp.datasets import MapDataset
 import numpy as np
 
 
-max_len = 256
-ent2id = {"bod": 0, "dis": 1, "sym": 2, "mic": 3, "pro": 4, "ite": 5, "dep": 6, "dru": 7, "equ": 8}
-id2ent = {}
-for k, v in ent2id.items(): id2ent[v] = k
-
-
-def load_data(path):
-    D = []
-    for d in json.load(open(path)):
-        D.append([d['text']])
-        for e in d['entities']:
-            start, end, label = e['start_idx'], e['end_idx'], e['type']
-            if start <= end:
-                D[-1].append((start, end, ent2id[label]))
-    return D
+MAX_LEN = 1024
 
 
 class MapDataset(Dataset):
-    def __init__(self, data, tokenizer, istrain=True):
+    def __init__(self, data_path, tokenizer, istrain=True):
         super(MapDataset, self).__init__()
-        self.data = data
+        self.categories = set()
+        self.data = self.load_data(data_path)
         self.tokenizer = tokenizer
         self.istrain = istrain
 
     def __len__(self):
         return len(self.data)
 
+    def load_data(self, filename):
+        """加载数据
+        单条格式：[text, (start, end, label), (start, end, label), ...]，
+                  意味着text[start:end + 1]是类型为label的实体。
+        """
+        D = []
+        with open(filename, encoding='utf-8') as f:
+            for l in f:
+                l = json.loads(l.strip())
+                d = [l[0]]
+                for item in l[1:]:
+                    self.categories.add(item[2])
+                    d.append(tuple(item))
+                D.append(d)
+        self.categories = list(sorted(self.categories))
+        return D
+
     def encoder(self, item):
         if self.istrain:
             text = item[0]
-            token2char_span_mapping = self.tokenizer(text, return_offsets_mapping=True, max_length=max_len, truncation=True)["offset_mapping"]
+            # token2char_span_mapping = self.tokenizer(text,
+            #                                          return_offsets_mapping=True,
+            #                                          max_length=MAX_LEN,
+            #                                          truncation=True)["offset_mapping"]
+            token2char_span_mapping = self.tokenizer.get_offset_mapping(text)[:MAX_LEN - 2]
+            token2char_span_mapping = self.tokenizer.build_offset_mapping_with_special_tokens(offset_mapping_0=token2char_span_mapping)
             start_mapping = {j[0]: i for i, j in enumerate(token2char_span_mapping) if j != (0, 0)}
             end_mapping = {j[-1] - 1: i for i, j in enumerate(token2char_span_mapping) if j != (0, 0)}
-            #将raw_text的下标 与 token的start和end下标对应
-            encoder_txt = self.tokenizer.encode_plus(text, max_length=max_len, truncation=True)
+            encoder_txt = self.tokenizer.encode(text, max_seq_len=MAX_LEN, return_attention_mask=True)
             input_ids = encoder_txt["input_ids"]
             token_type_ids = encoder_txt["token_type_ids"]
             attention_mask = encoder_txt["attention_mask"]
@@ -80,11 +88,11 @@ class MapDataset(Dataset):
         raw_text_list, batch_input_ids, batch_attention_mask, batch_labels, batch_segment_ids = [], [], [], [], []
         for item in examples:
             raw_text, start_mapping, end_mapping, input_ids, token_type_ids, attention_mask = self.encoder(item)
-
-            labels = np.zeros((len(ent2id), max_len, max_len))
+            labels = np.zeros((len(self.categories), MAX_LEN, MAX_LEN))
             for start, end, label in item[1:]:
                 if start in start_mapping and end in end_mapping:
                     start = start_mapping[start]
+                    label = self.categories.index(label)
                     end = end_mapping[end]
                     labels[label, start, end] = 1
             raw_text_list.append(raw_text)
@@ -92,10 +100,10 @@ class MapDataset(Dataset):
             batch_segment_ids.append(token_type_ids)
             batch_attention_mask.append(attention_mask)
             batch_labels.append(labels[:, :len(input_ids), :len(input_ids)])
-        batch_inputids = paddle.to_tensor(self.sequence_padding(batch_input_ids)).long()
-        batch_segmentids = paddle.to_tensor(self.sequence_padding(batch_segment_ids)).long()
-        batch_attentionmask = paddle.to_tensor(self.sequence_padding(batch_attention_mask)).float()
-        batch_labels = paddle.to_tensor(self.sequence_padding(batch_labels, seq_dims=3)).long()
+        batch_inputids = paddle.to_tensor(self.sequence_padding(batch_input_ids), dtype='int64')
+        batch_segmentids = paddle.to_tensor(self.sequence_padding(batch_segment_ids), dtype='int64')
+        batch_attentionmask = paddle.to_tensor(self.sequence_padding(batch_attention_mask), dtype='float32')
+        batch_labels = paddle.to_tensor(self.sequence_padding(batch_labels, seq_dims=3), dtype='int64')
 
         return raw_text_list, batch_inputids, batch_attentionmask, batch_segmentids, batch_labels
 
