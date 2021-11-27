@@ -53,12 +53,12 @@ def multilabel_categorical_crossentropy(y_pred, y_true):
 
 def loss_fun(y_pred, y_true):
     """
-    y_true:(batch_size, ent_type_size, seq_len, seq_len)
-    y_pred:(batch_size, ent_type_size, seq_len, seq_len)
+    y_true:(batch_size, entity_type_num, seq_len, seq_len)
+    y_pred:(batch_size, entity_type_num, seq_len, seq_len)
     """
-    batch_size, ent_type_size = y_pred.shape[:2]
-    y_true = y_true.reshape((batch_size * ent_type_size, -1))
-    y_pred = y_pred.reshape((batch_size * ent_type_size, -1))
+    batch_size, entity_type_num = y_pred.shape[:2]
+    y_true = y_true.reshape((batch_size * entity_type_num, -1))
+    y_pred = y_pred.reshape((batch_size * entity_type_num, -1))
     loss = multilabel_categorical_crossentropy(y_pred, y_true)
     return loss
 

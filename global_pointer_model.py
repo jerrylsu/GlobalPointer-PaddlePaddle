@@ -35,16 +35,16 @@ class MetricsCalculator(object):
 
 
 class GlobalPointer(nn.Layer):
-    def __init__(self, encoder, ent_type_size, inner_dim, RoPE=True):
+    def __init__(self, encoder, entity_type_num, inner_dim, RoPE=True):
         # encoder: ernie-1.0 as encoder
         # inner_dim: 64
-        # ent_type_size: ent_cls_num
+        # entity_type_num: ent_cls_num
         super(GlobalPointer, self).__init__()
         self.encoder = encoder
-        self.ent_type_size = ent_type_size
+        self.entity_type_num = entity_type_num
         self.inner_dim = inner_dim
         self.hidden_size = encoder.config['hidden_size']
-        self.dense = nn.Linear(self.hidden_size, self.ent_type_size * self.inner_dim * 2)
+        self.dense = nn.Linear(self.hidden_size, self.entity_type_num * self.inner_dim * 2)
         self.RoPE = RoPE
 
     def sinusoidal_position_embedding(self, batch_size, seq_len, output_dim):
@@ -69,12 +69,12 @@ class GlobalPointer(nn.Layer):
         batch_size = last_hidden_state.shape[0]
         seq_len = last_hidden_state.shape[1]
 
-        # outputs:(batch_size, seq_len, ent_type_size*inner_dim*2)
+        # outputs:(batch_size, seq_len, entity_type_num*inner_dim*2)
         outputs = self.dense(last_hidden_state)
-        outputs = paddle.split(outputs, self.ent_type_size, axis=-1)
-        # outputs:(batch_size, seq_len, ent_type_size, inner_dim*2)
+        outputs = paddle.split(outputs, self.entity_type_num, axis=-1)
+        # outputs:(batch_size, seq_len, entity_type_num, inner_dim*2)
         outputs = paddle.stack(outputs, axis=-2)
-        # qw,kw:(batch_size, seq_len, ent_type_size, inner_dim)
+        # qw,kw:(batch_size, seq_len, entity_type_num, inner_dim)
         qw, kw = outputs[..., :self.inner_dim], outputs[..., self.inner_dim:]
         if self.RoPE:
             # pos_emb:(batch_size, seq_len, inner_dim)
@@ -88,12 +88,12 @@ class GlobalPointer(nn.Layer):
             kw2 = paddle.stack([-kw[..., 1::2], kw[..., ::2]], -1)
             kw2 = kw2.reshape(kw.shape)
             kw = kw * cos_pos + kw2 * sin_pos
-        # logits:(batch_size, ent_type_size, seq_len, seq_len)
+        # logits:(batch_size, entity_type_num, seq_len, seq_len)
         logits = paddle.einsum('bmhd,bnhd->bhmn', qw, kw)
 
         # padding mask
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-        pad_mask = paddle.expand(attention_mask, (batch_size, self.ent_type_size, seq_len, seq_len))
+        pad_mask = paddle.expand(attention_mask, (batch_size, self.entity_type_num, seq_len, seq_len))
         logits = logits * pad_mask - (1 - pad_mask) * 1e12
 
         # 排除下三角
